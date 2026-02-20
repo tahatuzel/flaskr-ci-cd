@@ -1,93 +1,292 @@
-# ci-cd-project
+# Flaskr — CI/CD Blog Application
 
+A full-stack blog application built with **Flask**, containerized with **Docker**, deployed to **AWS ECS Fargate** via a fully automated **GitLab CI/CD** pipeline, with infrastructure provisioned using **Terraform**.
 
+---
 
-## Getting started
+## Table of Contents
 
-To make it easy for you to get started with GitLab, here's a list of recommended next steps.
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Tech Stack](#tech-stack)
+- [Project Structure](#project-structure)
+- [Application Features](#application-features)
+- [Getting Started](#getting-started)
+  - [Prerequisites](#prerequisites)
+  - [Local Development](#local-development)
+  - [Running with Docker](#running-with-docker)
+  - [Running Tests](#running-tests)
+- [Infrastructure (Terraform)](#infrastructure-terraform)
+  - [AWS Resources](#aws-resources)
+  - [Deploying Infrastructure](#deploying-infrastructure)
+  - [Terraform Variables](#terraform-variables)
+- [CI/CD Pipeline](#cicd-pipeline)
+  - [Pipeline Stages](#pipeline-stages)
+  - [Required CI/CD Variables](#required-cicd-variables)
+- [License](#license)
 
-Already a pro? Just edit this README.md and make it your own. Want to make it easy? [Use the template at the bottom](#editing-this-readme)!
+---
 
-## Add your files
+## Overview
 
-* [Create](https://docs.gitlab.com/user/project/repository/web_editor/#create-a-file) or [upload](https://docs.gitlab.com/user/project/repository/web_editor/#upload-a-file) files
-* [Add files using the command line](https://docs.gitlab.com/topics/git/add_files/#add-files-to-a-git-repository) or push an existing Git repository with the following command:
+This project demonstrates a production-grade DevOps workflow around the classic [Flask Tutorial](https://flask.palletsprojects.com/tutorial/) blog application. Users can register, log in, and create/edit/delete blog posts. The focus is on the end-to-end delivery pipeline:
+
+1. **Code** → Push to GitLab
+2. **Test** → Automated pytest suite
+3. **Build** → Docker image creation
+4. **Push** → Image pushed to AWS ECR
+5. **Deploy** → Rolling update on AWS ECS Fargate
+
+---
+
+## Architecture
 
 ```
-cd existing_repo
-git remote add origin https://gitlab.com/tahatuzel-group/ci-cd-project.git
-git branch -M main
-git push -uf origin main
+┌──────────────┐       ┌──────────────────────────────────────────────────┐
+│   Developer  │       │                    AWS Cloud                    │
+│              │       │                                                  │
+│  git push    │       │  ┌────────┐    ┌──────────┐    ┌─────────────┐  │
+│      │       │       │  │  ECR   │    │   ALB    │    │ ECS Fargate │  │
+│      ▼       │       │  │ (Image │◄───│ (Public  │───►│  (Private   │  │
+│  ┌───────┐   │       │  │  Repo) │    │  HTTP)   │    │  Subnets)   │  │
+│  │GitLab │   │       │  └────────┘    └──────────┘    └─────────────┘  │
+│  │ CI/CD ├───┼──────►│                                                  │
+│  └───────┘   │       │  ┌──────────────────────────────────────────┐   │
+│              │       │  │         VPC (10.0.0.0/16)                │   │
+│              │       │  │  Public Subnets  │  Private Subnets      │   │
+│              │       │  │  (ALB, NAT GW)   │  (ECS Tasks)         │   │
+│              │       │  └──────────────────────────────────────────┘   │
+└──────────────┘       └──────────────────────────────────────────────────┘
 ```
 
-## Integrate with your tools
+---
 
-* [Set up project integrations](https://gitlab.com/tahatuzel-group/ci-cd-project/-/settings/integrations)
+## Tech Stack
 
-## Collaborate with your team
+| Layer            | Technology                              |
+| ---------------- | --------------------------------------- |
+| **Application**  | Python 3.12, Flask, SQLite, Jinja2      |
+| **WSGI Server**  | Waitress                                |
+| **Packaging**    | Flit / pyproject.toml                   |
+| **Testing**      | Pytest                                  |
+| **Container**    | Docker (python:3.12-slim)               |
+| **CI/CD**        | GitLab CI/CD (4 stages)                 |
+| **IaC**          | Terraform ≥ 1.5, AWS Provider ~> 5.0   |
+| **Cloud**        | AWS (VPC, ECR, ECS Fargate, ALB, IAM)   |
 
-* [Invite team members and collaborators](https://docs.gitlab.com/user/project/members/)
-* [Create a new merge request](https://docs.gitlab.com/user/project/merge_requests/creating_merge_requests/)
-* [Automatically close issues from merge requests](https://docs.gitlab.com/user/project/issues/managing_issues/#closing-issues-automatically)
-* [Enable merge request approvals](https://docs.gitlab.com/user/project/merge_requests/approvals/)
-* [Set auto-merge](https://docs.gitlab.com/user/project/merge_requests/auto_merge/)
+---
 
-## Test and Deploy
+## Project Structure
 
-Use the built-in continuous integration in GitLab.
+```
+.
+├── flaskr/                     # Flask application package
+│   ├── __init__.py             # Application factory
+│   ├── auth.py                 # Authentication blueprint (register/login/logout)
+│   ├── blog.py                 # Blog blueprint (CRUD operations)
+│   ├── db.py                   # SQLite database layer
+│   ├── schema.sql              # Database schema (user & post tables)
+│   ├── static/                 # Static assets (CSS)
+│   └── templates/              # Jinja2 templates
+│       ├── base.html           # Base layout template
+│       ├── auth/               # Auth templates (login, register)
+│       └── blog/               # Blog templates (index, create, update)
+│
+├── tests/                      # Test suite
+│   ├── conftest.py             # Pytest fixtures
+│   ├── data.sql                # Test seed data
+│   ├── test_auth.py            # Authentication tests
+│   ├── test_blog.py            # Blog CRUD tests
+│   ├── test_db.py              # Database tests
+│   └── test_factory.py         # App factory tests
+│
+├── infrastructure/             # Terraform IaC
+│   ├── main.tf                 # Root module — wires all child modules
+│   ├── variables.tf            # Input variables
+│   ├── outputs.tf              # Output values (for CI/CD integration)
+│   ├── provider.tf             # AWS provider configuration
+│   └── modules/
+│       ├── networking/         # VPC, subnets, IGW, NAT GW, route tables
+│       ├── security/           # Security groups (ALB + ECS)
+│       ├── ecr/                # ECR repository + lifecycle policy
+│       ├── iam/                # ECS task execution & task roles
+│       ├── alb/                # Application Load Balancer + target group
+│       └── ecs/                # ECS cluster, task definition, service
+│
+├── Dockerfile                  # Multi-stage Docker build
+├── .dockerignore               # Docker build exclusions
+├── .gitlab-ci.yml              # GitLab CI/CD pipeline definition
+├── pyproject.toml              # Python project metadata & dependencies
+├── LICENSE.txt                 # BSD 3-Clause License
+└── .gitignore                  # Git exclusions
+```
 
-* [Get started with GitLab CI/CD](https://docs.gitlab.com/ci/quick_start/)
-* [Analyze your code for known vulnerabilities with Static Application Security Testing (SAST)](https://docs.gitlab.com/user/application_security/sast/)
-* [Deploy to Kubernetes, Amazon EC2, or Amazon ECS using Auto Deploy](https://docs.gitlab.com/topics/autodevops/requirements/)
-* [Use pull-based deployments for improved Kubernetes management](https://docs.gitlab.com/user/clusters/agent/)
-* [Set up protected environments](https://docs.gitlab.com/ci/environments/protected_environments/)
+---
 
-***
+## Application Features
 
-# Editing this README
+- **User Registration** — Create an account with a unique username and hashed password
+- **Login / Logout** — Session-based authentication using Flask sessions
+- **Create Posts** — Authenticated users can publish blog posts
+- **Edit Posts** — Authors can update their own posts
+- **Delete Posts** — Authors can delete their own posts
+- **SQLite Database** — Lightweight database initialized via `flask init-db`
 
-When you're ready to make this README your own, just edit this file and use the handy template below (or feel free to structure it however you want - this is just a starting point!). Thanks to [makeareadme.com](https://www.makeareadme.com/) for this template.
+---
 
-## Suggestions for a good README
+## Getting Started
 
-Every project is different, so consider which of these sections apply to yours. The sections used in the template are suggestions for most open source projects. Also keep in mind that while a README can be too long and detailed, too long is better than too short. If you think your README is too long, consider utilizing another form of documentation rather than cutting out information.
+### Prerequisites
 
-## Name
-Choose a self-explaining name for your project.
+- **Python** 3.12+
+- **Docker** (for containerized deployment)
+- **Terraform** ≥ 1.5 (for infrastructure provisioning)
+- **AWS CLI** configured with appropriate credentials
+- **GitLab** account (for CI/CD)
 
-## Description
-Let people know what your project can do specifically. Provide context and add a link to any reference visitors might be unfamiliar with. A list of Features or a Background subsection can also be added here. If there are alternatives to your project, this is a good place to list differentiating factors.
+### Local Development
 
-## Badges
-On some READMEs, you may see small images that convey metadata, such as whether or not all the tests are passing for the project. You can use Shields to add some to your README. Many services also have instructions for adding a badge.
+```bash
+# Clone the repository
+git clone https://gitlab.com/tahatuzel-group/ci-cd-project.git
+cd ci-cd-project
 
-## Visuals
-Depending on what you are making, it can be a good idea to include screenshots or even a video (you'll frequently see GIFs rather than actual videos). Tools like ttygif can help, but check out Asciinema for a more sophisticated method.
+# Create a virtual environment
+python -m venv .venv
+source .venv/bin/activate   # Linux/macOS
+.venv\Scripts\activate      # Windows
 
-## Installation
-Within a particular ecosystem, there may be a common way of installing things, such as using Yarn, NuGet, or Homebrew. However, consider the possibility that whoever is reading your README is a novice and would like more guidance. Listing specific steps helps remove ambiguity and gets people to using your project as quickly as possible. If it only runs in a specific context like a particular programming language version or operating system or has dependencies that have to be installed manually, also add a Requirements subsection.
+# Install the app in development mode
+pip install -e .
 
-## Usage
-Use examples liberally, and show the expected output if you can. It's helpful to have inline the smallest example of usage that you can demonstrate, while providing links to more sophisticated examples if they are too long to reasonably include in the README.
+# Initialize the database
+flask --app flaskr init-db
 
-## Support
-Tell people where they can go to for help. It can be any combination of an issue tracker, a chat room, an email address, etc.
+# Run the development server
+flask --app flaskr run --debug
+```
 
-## Roadmap
-If you have ideas for releases in the future, it is a good idea to list them in the README.
+The app will be available at **http://localhost:5000**.
 
-## Contributing
-State if you are open to contributions and what your requirements are for accepting them.
+### Running with Docker
 
-For people who want to make changes to your project, it's helpful to have some documentation on how to get started. Perhaps there is a script that they should run or some environment variables that they need to set. Make these steps explicit. These instructions could also be useful to your future self.
+```bash
+# Build the image
+docker build -t flaskr .
 
-You can also document commands to lint the code or run tests. These steps help to ensure high code quality and reduce the likelihood that the changes inadvertently break something. Having instructions for running tests is especially helpful if it requires external setup, such as starting a Selenium server for testing in a browser.
+# Run the container
+docker run -p 5000:5000 flaskr
+```
 
-## Authors and acknowledgment
-Show your appreciation to those who have contributed to the project.
+The container uses **Waitress** as the production WSGI server, serving on port `5000`.
+
+### Running Tests
+
+```bash
+# Install test dependencies
+pip install -e ".[test]"
+
+# Run the test suite
+pytest tests/ -v
+```
+
+---
+
+## Infrastructure (Terraform)
+
+The `infrastructure/` directory contains a modular Terraform configuration that provisions the complete AWS environment.
+
+### AWS Resources
+
+| Module          | Resources Created                                                   |
+| --------------- | ------------------------------------------------------------------- |
+| **Networking**  | VPC, 2 public subnets, 2 private subnets, IGW, NAT Gateway, routes |
+| **Security**    | ALB security group (HTTP :80), ECS security group (container port)  |
+| **ECR**         | Container registry with image scanning & lifecycle policy (10 max)  |
+| **IAM**         | ECS task execution role, ECS task role                              |
+| **ALB**         | Application Load Balancer, target group, HTTP listener              |
+| **ECS**         | Fargate cluster, task definition, service, CloudWatch log group     |
+
+### Deploying Infrastructure
+
+```bash
+cd infrastructure
+
+# Initialize Terraform
+terraform init
+
+# Preview the changes
+terraform plan
+
+# Apply the infrastructure
+terraform apply
+```
+
+After `terraform apply`, the outputs will provide the values needed for GitLab CI/CD variables:
+
+```bash
+terraform output
+# ecr_repository_url    → ECR_REPO_NAME
+# ecs_cluster_name      → ECS_CLUSTER_NAME
+# ecs_service_name      → ECS_SERVICE_NAME
+# ecs_task_definition   → ECS_TASK_DEFINITION
+# alb_dns_name          → Application URL
+# aws_region            → AWS_DEFAULT_REGION
+```
+
+### Terraform Variables
+
+| Variable          | Default        | Description                        |
+| ----------------- | -------------- | ---------------------------------- |
+| `aws_region`      | `eu-central-1` | AWS region                         |
+| `project_name`    | `flaskr`       | Resource naming prefix             |
+| `vpc_cidr`        | `10.0.0.0/16`  | VPC CIDR block                     |
+| `container_port`  | `5000`         | Port the container listens on      |
+| `cpu`             | `256`          | Fargate task CPU units             |
+| `memory`          | `512`          | Fargate task memory (MiB)          |
+| `desired_count`   | `1`            | Number of ECS tasks to run         |
+
+---
+
+## CI/CD Pipeline
+
+The `.gitlab-ci.yml` defines a four-stage pipeline that runs on every push:
+
+### Pipeline Stages
+
+```
+┌─────────┐     ┌─────────┐     ┌─────────┐     ┌──────────┐
+│  TEST   │────►│  BUILD  │────►│  PUSH   │────►│  DEPLOY  │
+│         │     │         │     │         │     │          │
+│ pytest  │     │ docker  │     │ ECR     │     │ ECS      │
+│         │     │ build   │     │ push    │     │ update   │
+└─────────┘     └─────────┘     └─────────┘     └──────────┘
+```
+
+1. **Test** — Installs dependencies and runs `pytest tests/ -v` on `python:3.12-slim`
+2. **Build** — Builds the Docker image and saves it as a pipeline artifact (`image.tar`)
+3. **Push** — Authenticates to AWS ECR and pushes the image tagged with both `commit SHA` and `latest`
+4. **Deploy** — Registers a new ECS task definition with the updated image and triggers a rolling deployment
+
+### Required CI/CD Variables
+
+Set these in **GitLab → Settings → CI/CD → Variables**:
+
+| Variable               | Description                         |
+| ---------------------- | ----------------------------------- |
+| `AWS_ACCESS_KEY_ID`    | AWS IAM access key                  |
+| `AWS_SECRET_ACCESS_KEY`| AWS IAM secret key                  |
+| `AWS_DEFAULT_REGION`   | AWS region (e.g. `eu-central-1`)    |
+| `AWS_ACCOUNT_ID`       | AWS account ID                      |
+| `ECR_REPO_NAME`        | ECR repository name                 |
+| `ECS_CLUSTER_NAME`     | ECS cluster name                    |
+| `ECS_SERVICE_NAME`     | ECS service name                    |
+| `ECS_TASK_DEFINITION`  | ECS task definition family          |
+
+> **Tip:** All values except AWS credentials can be obtained from `terraform output`.
+
+---
 
 ## License
-For open source projects, say how it is licensed.
 
-## Project status
-If you have run out of energy or time for your project, put a note at the top of the README saying that development has slowed down or stopped completely. Someone may choose to fork your project or volunteer to step in as a maintainer or owner, allowing your project to keep going. You can also make an explicit request for maintainers.
+This project is licensed under the **BSD 3-Clause License**. See [LICENSE.txt](LICENSE.txt) for details.
