@@ -1,0 +1,28 @@
+# Tests
+tests/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Version control
+.git/
+.gitignore
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.egg-info/
+dist/
+build/
+
+# Virtual environment
+.venv/
+
+# IDE
+.idea/
+*.swp
+*~
+
+# Docker
+Dockerfile
+.dockerignore
